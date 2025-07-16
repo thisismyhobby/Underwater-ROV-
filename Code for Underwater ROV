@@ -1,1 +1,160 @@
-hi this is a code for my ROV 
+#Code for the ROV
+
+
+#define BLYNK_TEMPLATE_ID "TMPL3zQ81XtKF"
+#define BLYNK_TEMPLATE_NAME "sensor data"
+#define BLYNK_AUTH_TOKEN "Ehhe0axvCI0LI4qNY6-rCnkTUo4HEV_l"
+
+#define BLYNK_PRINT Serial
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <TinyGPSPlus.h>
+#include <HardwareSerial.h>
+
+
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "S";  
+char pass[] = "CNEE1A015CCC";  
+
+BlynkTimer timer;
+
+
+#define DS18B20_PIN 4 
+OneWire oneWire(DS18B20_PIN);
+DallasTemperature DS18B20(&oneWire);
+
+
+#define TURBIDITY_SENSOR_PIN 35
+
+
+#define LED_BUILTIN 2 
+
+
+#define RX2 16
+#define TX2 17
+HardwareSerial gpsSerial(2);
+TinyGPSPlus gps;
+
+
+struct TurbidityData {
+  int value;
+  float voltage;
+  float NTU;
+};
+
+
+void initializeSensors() {
+  pinMode(TURBIDITY_SENSOR_PIN, INPUT);
+  analogSetPinAttenuation(TURBIDITY_SENSOR_PIN, ADC_11db);  // Ensure proper ADC scaling
+  pinMode(LED_BUILTIN, OUTPUT);
+  DS18B20.begin();
+  gpsSerial.begin(9600, SERIAL_8N1, RX2, TX2);
+}
+
+
+TurbidityData readTurbidity() {
+  TurbidityData data;
+  
+  delay(10);  
+  data.value = analogRead(TURBIDITY_SENSOR_PIN);
+  
+  if (data.value == 0) {
+    Serial.println(" Turbidity sensor reading 0! Check connections.");
+  }
+
+  data.voltage = (data.value / 4095.0) * 3.3; 
+  data.NTU = (data.voltage * 3000) / 3.3;  
+
+  return data;
+}
+
+
+void readGPS(float &latitude, float &longitude) {
+  latitude = 0.0;
+  longitude = 0.0;
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+    if (gps.location.isUpdated()) {
+      latitude = gps.location.lat();
+      longitude = gps.location.lng();
+    }
+  }
+}
+
+
+void sendSensorData() {
+  // Read Temperature
+  DS18B20.requestTemperatures();
+  float tempC = DS18B20.getTempCByIndex(0);
+
+  if (tempC == DEVICE_DISCONNECTED_C) {
+    Serial.println(" Failed to read from DS18B20 sensor!");
+    return;
+  }
+
+  
+  TurbidityData turbidity = readTurbidity();
+
+  
+  float latitude, longitude;
+  readGPS(latitude, longitude);
+
+
+  Blynk.virtualWrite(V0, tempC);      
+  Blynk.virtualWrite(V1, turbidity.NTU/2); 
+  Blynk.virtualWrite(V2, latitude);   
+  Blynk.virtualWrite(V3, longitude);  
+
+  
+  Serial.print(" DS18B20 Temperature: ");
+  Serial.print(tempC);
+  Serial.println(" °C");
+
+  Serial.print(" Turbidity Sensor Value: ");
+  Serial.print(turbidity.value);
+  Serial.print(" | Voltage: ");
+  Serial.print(turbidity.voltage, 2);
+  Serial.print("V | NTU: ");
+  Serial.println(turbidity.NTU);
+
+  Serial.print(" Latitude: ");
+  Serial.println(latitude, 6);
+  Serial.print(" Longitude: ");
+  Serial.println(longitude, 6);
+}
+
+
+void connectWiFi() {
+  WiFi.begin(ssid, pass);
+  int connectAttempts = 0;
+  while (WiFi.status() != WL_CONNECTED && connectAttempts < 20) { 
+    digitalWrite(LED_BUILTIN, LOW); 
+    delay(500);
+    Serial.println("Connecting to WiFi...");
+    connectAttempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println(" Connected to WiFi");
+    digitalWrite(LED_BUILTIN, HIGH); 
+    Blynk.begin(auth, ssid, pass);
+  } else {
+    Serial.println("Failed to connect to WiFi");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  initializeSensors();
+  connectWiFi();
+  timer.setInterval(1000L, sendSensorData);
+}
+
+void loop() {
+  if (WiFi.status() == WL_CONNECTED) {
+    Blynk.run();
+  }
+  timer.run();
+}
